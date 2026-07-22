@@ -8,8 +8,10 @@ public interface Index {
 
     void put(String key, Entry entry);
 
+    void delete(String key);
+
     Optional<Entry> get(String key);
 
-    record Entry(String segmentId, int offset) {
+    record Entry(String fileId, long offset) {
     }
 }
