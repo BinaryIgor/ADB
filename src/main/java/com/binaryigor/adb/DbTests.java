@@ -5,11 +5,15 @@ import java.nio.file.Path;
 import java.util.Random;
 import java.util.UUID;
 
+// TODO: write real tests
 public class DbTests {
     void main() throws Exception {
         var dbPath = Path.of("/tmp", "adb");
 
-        var db = new TheDB(dbPath, new TheIndex(), 256 * 1024 * 1024);
+        var index = new TheIndex(dbPath);
+
+        // TODO: validate configured data file size
+        var db = new TheDB(dbPath, index, 256 * 1024 * 1024);
 
         var random = new Random();
 
@@ -18,7 +22,7 @@ public class DbTests {
 
         db.put(key, value);
 
-        var indexEntries = ADBFiles.scanAllIndexEntries(dbPath);
+        var indexEntries = ADBFiles.readAllIndexEntries(dbPath);
 
         System.out.println("All index entries: " + indexEntries.size());
         indexEntries.forEach(System.out::println);
@@ -28,5 +32,6 @@ public class DbTests {
 
         var dbValue = db.get(key);
         System.out.println("Key from db: " + dbValue);
+        dbValue.ifPresent(e -> System.out.println("...value: " + new String(e, StandardCharsets.UTF_8)));
     }
 }
