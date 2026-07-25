@@ -47,3 +47,4 @@ Secondary indexes could also be supported easily by referencing to the Primary (
 4. Configuration options
 5. Index in-memory limitations
 6. Cyclic Redundancy Check (CRC) files could be useful
+7. Slow tests profile
