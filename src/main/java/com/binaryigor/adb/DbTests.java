@@ -10,10 +10,9 @@ public class DbTests {
     void main() throws Exception {
         var dbPath = Path.of("/tmp", "adb");
 
-        var index = new TheIndex(dbPath);
-
         // TODO: validate configured data file size
-        var db = new TheDB(dbPath, index, 256 * 1024 * 1024);
+        var db = new TheDB(dbPath, 256 * 1024 * 1024);
+        db.init();
 
         var random = new Random();
 

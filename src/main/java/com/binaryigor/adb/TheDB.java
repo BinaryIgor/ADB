@@ -26,19 +26,26 @@ public class TheDB implements ADB {
     private final AtomicReference<String> currentDataFileId = new AtomicReference<>();
     private final AtomicLong currentDataFileSize = new AtomicLong();
     private final Lock currentDataFileRotationLock = new ReentrantLock();
-    private final Index index;
+    private final InMemoryIndex index;
     private final int dataFileSize;
 
-    public TheDB(Path dbDir, Index index, int dataFileSize) {
+    // TODO: data file size validation
+    public TheDB(Path dbDir, int dataFileSize) {
         this.dbDir = dbDir;
-        this.index = index;
+        this.index = new InMemoryIndex();
         this.dataFileSize = dataFileSize;
+    }
 
+    @Override
+    public void init() {
         try {
-            initCurrentDataFile();
+            if (!Files.exists(dbDir)) {
+                Files.createDirectory(dbDir);
+            }
+            initCurrentDataFile(0);
             logger.info("DB initialized, current data file: {} with the size: {}", currentDataFileId.get(), currentDataFileSize.get());
             logger.info("Building the index...");
-            index.build();
+            index.build(dbDir);
             logger.info("Index built; everything ready");
         } catch (Exception e) {
             logger.error("Failed to initialize ADB", e);
@@ -46,8 +53,8 @@ public class TheDB implements ADB {
         }
     }
 
-    private void initCurrentDataFile() throws Exception {
-        var currentDataFilePath = ADBFiles.initDataFile(dbDir, dataFileSize);
+    private void initCurrentDataFile(int neededFreeSpace) throws Exception {
+        var currentDataFilePath = ADBFiles.resolveCurrentDataFile(dbDir, dataFileSize, neededFreeSpace);
         var currentDataFile = currentDataFilePath.toFile();
         currentDataFileOS.set(new FileOutputStream(currentDataFile, true));
         currentDataFileSize.set(Files.size(currentDataFilePath));
@@ -58,26 +65,28 @@ public class TheDB implements ADB {
         dataFileReadChannels.put(currentDataFileId.get(), currentDataFileReadChannel);
     }
 
+    // TODO: maybe forgot to initialize err in the exception msg?
     @Override
     public void put(String key, byte[] value) {
         try {
+            currentDataFileRotationLock.lock();
+            var entrySize = ADBFiles.entrySize(key, value);
             // intentionally, soft, not hard, file size guarantee - better performance
-            if (ADBFiles.canWriteNextEntry(dataFileSize, currentDataFileSize.get(), key, value)) {
-                var result = ADBFiles.writeNextEntry(currentDataFileOS.get(), key, value);
-                // TODO: guarantee with index consistency - somehow; (a few retries and process exit maybe?)
-                index.put(key, new Index.Entry(currentDataFileId.get(), result.offset()));
-                currentDataFileSize.getAndAdd(result.entrySize());
-            } else {
-                try {
-                    currentDataFileRotationLock.lock();
-                    initCurrentDataFile();
-                } finally {
-                    currentDataFileRotationLock.unlock();
-                }
+            if (!ADBFiles.canWriteNextEntry(dataFileSize, currentDataFileSize.get(), entrySize)) {
+                initCurrentDataFile(entrySize);
             }
         } catch (Exception e) {
-            logger.error("Failed to put data of {} key into ADB", key, e);
+            logger.error("Failed to init new current data file", e);
             throw new RuntimeException(e);
+        } finally {
+            currentDataFileRotationLock.unlock();
+        }
+        var result = ADBFiles.writeNextEntry(currentDataFileOS.get(), key, value);
+        currentDataFileSize.getAndAdd(result.entrySize());
+        if (value.length > 0) {
+            index.put(key, new InMemoryIndex.Entry(currentDataFileId.get(), result.offset()));
+        } else {
+            index.delete(key);
         }
     }
 
@@ -105,5 +114,29 @@ public class TheDB implements ADB {
 
         var entry = ADBFiles.readEntry(readChannel, indexEntry.offset());
         return Optional.of(entry.value());
+    }
+
+    private static class InMemoryIndex {
+        private final Map<String, Entry> index = new ConcurrentHashMap<>();
+
+        void build(Path dbDir) {
+            ADBFiles.readAllIndexEntries(dbDir)
+                    .forEach(e -> index.put(e.key(), new Entry(e.fileId(), e.offset())));
+        }
+
+        void put(String key, Entry entry) {
+            index.put(key, entry);
+        }
+
+        void delete(String key) {
+            index.remove(key);
+        }
+
+        Optional<Entry> get(String key) {
+            return Optional.ofNullable(index.get(key));
+        }
+
+        record Entry(String fileId, long offset) {
+        }
     }
 }

@@ -19,22 +19,18 @@ public class ADBFiles {
     private static final int NO_SIGN_BYTE_MASK = 0xFF;
     private static final int TOMBSTONE_VALUE_LENGTH = 0;
 
-    // TODO: lots of lacking tests!
-    public static Path initDataFile(Path dbDir, int wantedFileSize) {
+    public static Path resolveCurrentDataFile(Path dbDir, int wantedFileSize, int neededFreeSpace) {
         try {
-            if (!Files.exists(dbDir)) {
-                Files.createDirectory(dbDir);
-            }
             var latestDataFileOpt = resolveLatestDataFilePath(dbDir);
             if (latestDataFileOpt.isEmpty()) {
                 return dbDir.resolve(DATA_FILE_NAME + "000");
             }
             var latestDataFile = latestDataFileOpt.get();
-            if (wantedFileSize > Files.size(latestDataFile)) {
+            if (wantedFileSize > (Files.size(latestDataFile) + neededFreeSpace)) {
                 return latestDataFile;
             }
             var latestDataFileNumber = Integer.parseInt(latestDataFile.getFileName().toString().replace(DATA_FILE_NAME, ""));
-            return dbDir.resolve("%03d".formatted(latestDataFileNumber + 1));
+            return dbDir.resolve(DATA_FILE_NAME + "%03d".formatted(latestDataFileNumber + 1));
         } catch (Exception e) {
             throw new RuntimeException("Failed to initialize ADB data file", e);
         }
@@ -85,7 +81,6 @@ public class ADBFiles {
         try {
             // TODO: configurable maybe?
             var headerBuffer = ByteBuffer.allocate(DATA_FILE_HEADER_SIZE);
-            // TODO: thread-safety assumption
             fileChannel.read(headerBuffer, offset);
             headerBuffer.flip();
 
@@ -133,11 +128,11 @@ public class ADBFiles {
         return new DataEntry(entry.key(), entry.value());
     }
 
-    public static boolean canWriteNextEntry(long configuredDataFileSize, long currentDataFileSize, String key, byte[] value) {
-        return (configuredDataFileSize - currentDataFileSize) >= entrySize(key, value);
+    public static boolean canWriteNextEntry(long configuredDataFileSize, long currentDataFileSize, int entrySize) {
+        return (configuredDataFileSize - currentDataFileSize) >= entrySize;
     }
 
-    private static int entrySize(String key, byte[] value) {
+    public static int entrySize(String key, byte[] value) {
         return DATA_FILE_HEADER_SIZE + key.length() + value.length;
     }
 
@@ -166,8 +161,8 @@ public class ADBFiles {
                 bytesOS.write(value);
             }
 
-            // TODO: maybe configurable guarantees
             fileOS.write(bytesOS.toByteArray());
+            // TODO: maybe configurable guarantees, since sync call tends to be slooow
             fileOS.getFD().sync();
 
             return new WriteEntryResult(offset, entrySize);
