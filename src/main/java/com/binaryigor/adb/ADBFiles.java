@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
 
@@ -23,17 +24,22 @@ public class ADBFiles {
         try {
             var latestDataFileOpt = resolveLatestDataFilePath(dbDir);
             if (latestDataFileOpt.isEmpty()) {
-                return dbDir.resolve(DATA_FILE_NAME + "000");
+                return dbDir.resolve(dataFileName(0));
             }
             var latestDataFile = latestDataFileOpt.get();
             if (wantedFileSize > (Files.size(latestDataFile) + neededFreeSpace)) {
                 return latestDataFile;
             }
-            var latestDataFileNumber = Integer.parseInt(latestDataFile.getFileName().toString().replace(DATA_FILE_NAME, ""));
-            return dbDir.resolve(DATA_FILE_NAME + "%03d".formatted(latestDataFileNumber + 1));
+            var latestDataFileNumber = Long.parseLong(latestDataFile.getFileName().toString().replace(DATA_FILE_NAME, ""));
+            return dbDir.resolve(dataFileName(latestDataFileNumber + 1));
         } catch (Exception e) {
             throw new RuntimeException("Failed to initialize ADB data file", e);
         }
+    }
+
+    // 18 zeros - close to max long value: pretty much impossible to run out of numbers in this context + they might always be renamed relatively easily to start from scratch
+    public static String dataFileName(long number) {
+        return DATA_FILE_NAME + "%018d".formatted(number);
     }
 
     private static Optional<Path> resolveLatestDataFilePath(Path dbDir) throws Exception {
@@ -45,36 +51,95 @@ public class ADBFiles {
         }
     }
 
-    public static List<IndexEntry> readAllIndexEntries(Path dbDir) {
+    public static List<IndexEntry> readAllIndexEntriesSequentially(Path dbDir) {
         if (!Files.isDirectory(dbDir)) {
             return List.of();
         }
 
         try (var files = Files.list(dbDir)) {
             return files.filter(fp -> fp.toString().contains(DATA_FILE_NAME))
-                    .flatMap(fp -> readIndexEntries(fp).stream()).toList();
+                    .sorted()
+                    .flatMap(fp -> readNoValueEntries(fp).stream()
+                            .map(e -> new IndexEntry(fp.getFileName().toString(), e.key(), e.offset())))
+                    .toList();
         } catch (Exception e) {
             throw new RuntimeException("Failed to read index entries from %s db dir".formatted(dbDir), e);
         }
     }
 
-    private static List<IndexEntry> readIndexEntries(Path dbDir) {
-        var entries = new ArrayList<IndexEntry>();
+    private static List<InternalEntry> readNoValueEntries(Path dataFile) {
+        var entries = new ArrayList<InternalEntry>();
 
-        try (var channel = FileChannel.open(dbDir, StandardOpenOption.READ)) {
+        try (var channel = FileChannel.open(dataFile, StandardOpenOption.READ)) {
             var offset = 0;
             while (offset < channel.size()) {
                 var entry = readEntry(channel, offset, true);
                 offset += entry.totalSize();
-
-                var indexEntry = new IndexEntry(dbDir.getFileName().toString(), entry.key(), entry.offset());
-                entries.add(indexEntry);
+                entries.add(entry);
             }
         } catch (Exception e) {
-            throw new RuntimeException("Failed to read index entries from %s db file".formatted(dbDir), e);
+            throw new RuntimeException("Failed to read entries from %s db file".formatted(dataFile), e);
         }
 
         return entries;
+    }
+
+    // TODO: refactor
+    public static List<FileMetadata> readAllFilesMetadata(Path dbDir, LatestKeyVersionFileIdResolver latestKeyResolver) {
+        if (!Files.isDirectory(dbDir)) {
+            return List.of();
+        }
+
+        var filesMetadata = new ArrayList<FileMetadata>();
+
+        try (var files = Files.list(dbDir)) {
+            files.filter(fp -> fp.toString().contains(DATA_FILE_NAME))
+                    .sorted()
+                    .forEach(fp -> {
+                        var fileId = fp.getFileName().toString();
+                        var fileEntries = readNoValueEntries(fp);
+                        var minEntrySize = Integer.MAX_VALUE;
+                        var maxEntrySize = Integer.MIN_VALUE;
+                        var allEntriesSize = 0;
+                        var latestEntries = new HashMap<String, InternalEntry>();
+
+                        for (var fe : fileEntries) {
+                            latestEntries.put(fe.key(), fe);
+
+                            var entrySize = fe.totalSize();
+                            if (entrySize > maxEntrySize) {
+                                maxEntrySize = entrySize;
+                            }
+                            if (minEntrySize > entrySize) {
+                                minEntrySize = entrySize;
+                            }
+
+                            allEntriesSize += entrySize;
+                        }
+
+                        var entries = fileEntries.size();
+                        var meanEntrySize = allEntriesSize / entries;
+                        var deadEntries = entries - latestEntries.size();
+                        var deadEntriesSize = 0;
+                        for (var e : latestEntries.entrySet()) {
+                            var latestKeyFileId = latestKeyResolver.resolve(e.getKey());
+                            if (latestKeyFileId.isPresent() && !latestKeyFileId.get().equals(fileId)) {
+                                deadEntries++;
+                                deadEntriesSize += e.getValue().totalSize();
+                            }
+                        }
+                        var aliveEntries = entries - deadEntries;
+                        var aliveEntriesSize = allEntriesSize - deadEntriesSize;
+
+                        filesMetadata.add(new FileMetadata(fileId, entries, deadEntries, aliveEntries,
+                                allEntriesSize, deadEntriesSize, aliveEntriesSize,
+                                meanEntrySize, minEntrySize, maxEntrySize));
+                    });
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to read index entries from %s db dir".formatted(dbDir), e);
+        }
+
+        return filesMetadata;
     }
 
     private static InternalEntry readEntry(FileChannel fileChannel, long offset, boolean skipValue) {
@@ -174,6 +239,13 @@ public class ADBFiles {
     public record IndexEntry(String fileId, String key, long offset) {
     }
 
+    public record FileMetadata(String fileId,
+                               int entries, int deadEntries, int aliveEntries,
+                               int allEntriesSize, int deadEntriesSize, int aliveEntriesSize,
+                               int meanEntrySize, int minEntrySize, int maxEntrySize) {
+
+    }
+
     public record DataEntry(String key, byte[] value) {
     }
 
@@ -181,5 +253,9 @@ public class ADBFiles {
     }
 
     private record InternalEntry(String key, byte[] value, long offset, int totalSize) {
+    }
+
+    public interface LatestKeyVersionFileIdResolver {
+        Optional<String> resolve(String key);
     }
 }

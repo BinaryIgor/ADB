@@ -2,6 +2,7 @@ package com.binaryigor.adb;
 
 import java.util.Optional;
 
+// TODO: compaction, bulk put, delete and get
 public interface ADB {
 
     void init();

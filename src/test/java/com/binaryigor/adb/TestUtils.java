@@ -48,4 +48,8 @@ public class TestUtils {
         var randomIdx = RANDOM.nextInt(elements.size());
         return elements.get(randomIdx);
     }
+
+    public static String dataFileName(int num) {
+        return "data%018d".formatted(num);
+    }
 }

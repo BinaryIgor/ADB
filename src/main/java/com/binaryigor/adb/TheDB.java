@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-public class TheDB implements ADB {
+public class TheDB implements ADB, ADBFiles.LatestKeyVersionFileIdResolver {
 
     private static final Logger logger = LoggerFactory.getLogger(TheDB.class);
     private final Path dbDir;
@@ -60,7 +60,7 @@ public class TheDB implements ADB {
         currentDataFileSize.set(Files.size(currentDataFilePath));
         currentDataFileId.set(currentDataFile.getName());
 
-        // TODO: close when...
+        // TODO: close when not read from for N minutes/seconds
         var currentDataFileReadChannel = FileChannel.open(currentDataFilePath, StandardOpenOption.READ);
         dataFileReadChannels.put(currentDataFileId.get(), currentDataFileReadChannel);
     }
@@ -116,11 +116,16 @@ public class TheDB implements ADB {
         return Optional.of(entry.value());
     }
 
+    @Override
+    public Optional<String> resolve(String key) {
+        return index.get(key).map(InMemoryIndex.Entry::fileId);
+    }
+
     private static class InMemoryIndex {
         private final Map<String, Entry> index = new ConcurrentHashMap<>();
 
         void build(Path dbDir) {
-            ADBFiles.readAllIndexEntries(dbDir)
+            ADBFiles.readAllIndexEntriesSequentially(dbDir)
                     .forEach(e -> index.put(e.key(), new Entry(e.fileId(), e.offset())));
         }
 

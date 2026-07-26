@@ -35,13 +35,13 @@ public class TheDbTest {
     @Test
     void initializesDbDirWith000DataFile() {
         assertThat(Files.exists(dbDir)).isFalse();
-        assertThat(Files.exists(dbDir.resolve("data000"))).isFalse();
+        assertThat(Files.exists(dbDir.resolve(ADBFiles.dataFileName(0)))).isFalse();
 
         db.init();
 
         assertThat(Files.exists(dbDir)).isTrue();
         assertThat(Files.isDirectory(dbDir)).isTrue();
-        assertThat(Files.exists(dbDir.resolve("data000"))).isTrue();
+        assertThat(Files.exists(dbDir.resolve(ADBFiles.dataFileName(0)))).isTrue();
     }
 
     @Test
@@ -104,9 +104,9 @@ public class TheDbTest {
 
     @Test
     void createsNextDataFilesOnceSizeLimitIsReachedConcurrently() throws Exception {
-        var dataFile0 = dbDir.resolve("data000");
-        var dataFile1 = dbDir.resolve("data001");
-        var dataFile2 = dbDir.resolve("data002");
+        var dataFile0 = dbDir.resolve(ADBFiles.dataFileName(0));
+        var dataFile1 = dbDir.resolve(ADBFiles.dataFileName(1));
+        var dataFile2 = dbDir.resolve(ADBFiles.dataFileName(2));
 
         db.init();
 

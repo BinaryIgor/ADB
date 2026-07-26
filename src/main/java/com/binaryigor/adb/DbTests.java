@@ -1,13 +1,15 @@
 package com.binaryigor.adb;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Random;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.function.Function;
 
-// TODO: write real tests
 public class DbTests {
     void main() throws Exception {
+        outputMemoryStats();
+
         var dbPath = Path.of("/tmp", "adb");
 
         // TODO: validate configured data file size
@@ -16,21 +18,40 @@ public class DbTests {
 
         var random = new Random();
 
-        var key = "A" + random.nextInt(1000);
-        var value = ("Some varying value with " + UUID.randomUUID() + " id").getBytes(StandardCharsets.UTF_8);
+        var rounds = 1000;
+        var putsPerRound = 1000;
 
-        db.put(key, value);
+        for (int i = 0; i < rounds; i++) {
+            System.out.println("Putting next %s keys...".formatted(putsPerRound));
+            try (var executor = Executors.newFixedThreadPool(10)) {
+                for (int j = 0; j < putsPerRound; j++) {
+                    var key = UUID.randomUUID().toString();
+                    var value = new byte[1024];
+                    random.nextBytes(value);
+                    executor.submit(() -> db.put(key, value));
+                }
+            }
+            System.out.println("Next %s keys have been put".formatted(putsPerRound));
+            outputMemoryStats();
+            System.out.println("...");
+            Thread.sleep(1000);
+        }
 
-        var indexEntries = ADBFiles.readAllIndexEntries(dbPath);
+        outputMemoryStats();
+    }
 
-        System.out.println("All index entries: " + indexEntries.size());
-        indexEntries.forEach(System.out::println);
+    private void outputMemoryStats() {
+        long totalMemory = Runtime.getRuntime().totalMemory();
+        long freeMemory = Runtime.getRuntime().freeMemory();
+        long usedMemory = totalMemory - freeMemory;
 
-        System.out.println("...");
-        System.out.println("Getting data from the db, for the key: " + key);
+        Function<Long, String> formattedMemory = (memory) -> memory / (1024 * 1024) + " MB";
 
-        var dbValue = db.get(key);
-        System.out.println("Key from db: " + dbValue);
-        dbValue.ifPresent(e -> System.out.println("...value: " + new String(e, StandardCharsets.UTF_8)));
+        System.out.println();
+        System.out.println("Memory stats");
+        System.out.println("Total memory: " + formattedMemory.apply(totalMemory));
+        System.out.println("Free memory: " + formattedMemory.apply(freeMemory));
+        System.out.println("Used memory: " + formattedMemory.apply(usedMemory));
+        System.out.println();
     }
 }
